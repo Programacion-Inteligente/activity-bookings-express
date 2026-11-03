@@ -5,10 +5,15 @@ import { AuthenticatedRequest } from '../types/auth';
 import { ErrorResponse } from '../types/error';
 import { authenticateToken } from '../middleware/auth.middleware';
 import { logger } from '../utils/logger';
-import { activityRepository } from '../utils/data-loader';
+import { BookingService } from '../services/booking.service';
+import { PaymentService } from '../services/payment.service';
+import { MockPaymentGateway } from '../services/mock-payment-gateway';
+import { activityRepository, bookingRepository, paymentRepository } from '../utils/data-loader';
 
 const router = Router();
 const activityService = new ActivityService(activityRepository);
+const paymentService = new PaymentService(new MockPaymentGateway(), paymentRepository);
+const bookingService = new BookingService(activityService, paymentService, bookingRepository);
 
 /**
  * Normalizes create request body:
@@ -158,6 +163,41 @@ router.get('/:id', (req: Request, res: Response) => {
     logger.error('ActivityRoute', 'Failed to get activity', error);
     const errorResponse: ErrorResponse = {
       message: 'Failed to retrieve activity',
+      errors: [],
+    };
+    res.status(500).json(errorResponse);
+  }
+});
+
+/**
+ * GET /activities/:id/availability
+ * Returns the seat availability of an activity
+ * No authentication required
+ * Returns 200 with maxParticipants, bookedParticipants and availableSeats, 404 if not found
+ */
+router.get('/:id/availability', (req: Request, res: Response) => {
+  try {
+    const activity = activityService.getById(req.params.id);
+    if (!activity) {
+      const errorResponse: ErrorResponse = {
+        message: 'Activity not found',
+        errors: [],
+      };
+      return res.status(404).json(errorResponse);
+    }
+    const bookedParticipants = bookingService
+      .getBookingsByActivityId(activity.id)
+      .reduce((sum, booking) => sum + booking.participants, 0);
+    res.status(200).json({
+      activityId: activity.id,
+      maxParticipants: activity.maxParticipants,
+      bookedParticipants,
+      availableSeats: bookingService.calculateAvailableCapacity(activity.id),
+    });
+  } catch (error) {
+    logger.error('ActivityRoute', 'Failed to get activity availability', error);
+    const errorResponse: ErrorResponse = {
+      message: 'Failed to retrieve activity availability',
       errors: [],
     };
     res.status(500).json(errorResponse);
